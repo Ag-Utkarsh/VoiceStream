@@ -90,6 +90,10 @@ Build a real-time microservice that ingests streaming audio metadata from a PBX 
    - **Response**: `202 Accepted`
    - **Behavior**:
      - Transition state: IN_PROGRESS → COMPLETED
+     - Store expected total packet count
+     - Wait 3 seconds (grace period for late packets)
+     - Check for missing packets (log warning if incomplete)
+     - Transition state: COMPLETED → PROCESSING_AI
      - Trigger AI processing
 
 **Key Features:**
@@ -127,9 +131,9 @@ Build a real-time microservice that ingests streaming audio metadata from a PBX 
 
 **State Machine:**
 ```
-IN_PROGRESS → COMPLETED → PROCESSING_AI → ARCHIVED
-                                       ↓
-                                    FAILED
+IN_PROGRESS → COMPLETED (3s grace period) → PROCESSING_AI → ARCHIVED
+                                                          ↓
+                                                       FAILED
 ```
 
 **Valid Transitions:**
@@ -257,6 +261,10 @@ CREATE INDEX idx_packets_sequence ON packets(call_id, sequence);
 - 1-3 second variable latency
 - Returns combined transcription + sentiment
 
+**Input Format:**
+- Concatenated string of all packet data (space-separated)
+- Example: `"audio_chunk_1 audio_chunk_2 audio_chunk_3 ..."`
+
 **Response (Success):**
 ```json
 {
@@ -309,21 +317,28 @@ class MockAIService:
 ### 4.2 Call Completion Flow
 
 ```
-1. PBX sends POST /v1/call/complete/{call_id}
+1. PBX sends POST /v1/call/complete/{call_id} with total_packets
    ↓
 2. Transition state: IN_PROGRESS → COMPLETED
    ↓
-3. Check missing_sequences (log if not empty)
+3. Store expected_total_packets in database
    ↓
-4. Transition state: COMPLETED → PROCESSING_AI
+4. Grace period: Wait 3 seconds for late packets
    ↓
-5. Background task:
+5. Check completeness:
+   - Compare total_packets_received vs expected_total_packets
+   - Log warning if missing_sequences is not empty
+   - Log missing packet numbers for debugging
+   ↓
+6. Transition state: COMPLETED → PROCESSING_AI
+   ↓
+7. Background task:
    a. Fetch all packets (ORDER BY sequence)
-   b. Concatenate packet data
-   c. Call AI service with retry
-   d. Store results
-   e. Transition to ARCHIVED or FAILED
-   f. Broadcast completion to WebSocket
+   b. Concatenate packet data (space-separated string)
+   c. Call AI service with exponential backoff retry
+   d. Store results (transcription, sentiment)
+   e. Transition to ARCHIVED (success) or FAILED (retry exhausted)
+   f. Broadcast completion/failure event to WebSocket
 ```
 
 ### 4.3 Race Condition Handling
@@ -370,6 +385,12 @@ Result: No lost updates ✓
 - **Decision**: Enforce valid transitions with atomic updates
 - **Implementation**: UPDATE with WHERE condition on current state
 - **Benefit**: Only one thread can transition from given state
+
+### 5.6 Failed Call Handling
+- **Decision**: Store in database with FAILED state, no automatic retry
+- **Implementation**: After max retries exhausted, transition to FAILED, log error, broadcast to supervisors
+- **Benefit**: Audit trail preserved, manual intervention possible
+- **Production Enhancement**: Dead letter queue, automatic retry after delay, alerting
 
 ---
 
@@ -502,10 +523,30 @@ async def handle_unexpected_error(request: Request, exc: Exception):
 1. **Out-of-order packets**: Send 1,2,3,5,4 → verify gap detection
 2. **Missing packets**: Send 1,2,3,5 → verify warning logged
 3. **Duplicate packets**: Send sequence=4 twice → verify only one stored
-4. **Race condition**: Send two packets simultaneously → verify both stored
-5. **AI retry**: Mock 503 errors → verify exponential backoff
+4. **Race condition**: Use `asyncio.gather()` to send two packets simultaneously → verify both stored, no lost updates
+5. **AI retry**: Mock 503 errors → verify exponential backoff (1s, 2s, 4s, 8s delays)
 6. **State transitions**: Test all valid and invalid transitions
 7. **WebSocket**: Connect, receive events, disconnect
+8. **Grace period**: Send completion signal, send late packet within 3s → verify packet accepted and processed
+
+**Race Condition Test Approach:**
+```python
+import asyncio
+import pytest
+from httpx import AsyncClient
+
+@pytest.mark.asyncio
+async def test_race_condition():
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        # Send two packets concurrently using asyncio.gather
+        responses = await asyncio.gather(
+            client.post(f"/v1/call/stream/{call_id}", json=packet_1),
+            client.post(f"/v1/call/stream/{call_id}", json=packet_2)
+        )
+        # Verify both succeeded and both packets stored
+        assert all(r.status_code == 202 for r in responses)
+        assert call.total_packets_received == 2
+```
 
 ### Performance Tests
 - Measure API response time (<50ms)
