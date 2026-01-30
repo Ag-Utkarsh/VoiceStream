@@ -1,0 +1,29 @@
+Our PBX (Private Branch Exchange) system receives thousands of concurrent calls. When an agent is unavailable, we route the call to an AI Voice-Bot.
+
+Your task is to build a microservice that:
+
+Ingests a stream of simulated audio metadata.
+Orchestrates background processing for AI Transcription and Sentiment Analysis.
+Stores the results for a supervisor dashboard.
+Handles the "unreliable" nature of external AI APIs.
+Use websockets wherever appropriate.
+
+2. Technical Requirements
+
+A. Non-Blocking Ingestion (FastAPI & Async)
+Create a POST /v1/call/stream/{call_id} endpoint.
+This endpoint must accept a JSON payload representing a "packet" of audio metadata: {"sequence": int, "data": str, "timestamp": float}.
+The Twist: You must validate that packets arrive in order. If a packet is missing, log a warning, but do not block the API response. The API should return 202 Accepted within < 50ms.
+
+B. Database & State Management
+Use PostgreSQL with an Async Engine (SQLAlchemy or Tortoise).
+Implement a state machine for the Call object. A call must transition through: IN_PROGRESS,COMPLETED, PROCESSING_AI, FAILED, ARCHIVED
+
+C. The "Flaky" AI Service (Mocking)
+Create an internal service/dependency that simulates an external AI Transcription API.
+Requirement: This service must have a 25% failure rate (returning a 503 Service Unavailable) and a variable latency of 1–3 seconds.
+Task: Implement a Retry Strategy (Exponential Backoff) to ensure that call summaries are eventually processed without manual intervention.
+
+D. Testing
+Write an integration test using pytest and httpx.AsyncClient.
+Simulate a "Race Condition": Two packets arriving at the exact same time for the same call_id. How does your code handle database locking?
