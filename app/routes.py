@@ -11,6 +11,14 @@ logger = logging.getLogger(__name__)
 # Create router
 router = APIRouter()
 
+@router.get("/")
+async def health_check():
+    return {
+        "service": "VoiceStream PBX Microservice",
+        "status": "running",
+        "version": "1.0.0"
+    }
+
 @router.post("/v1/call/stream/{call_id}", response_model=PacketResponse, status_code=202)
 async def ingest_packet(
     call_id: str,

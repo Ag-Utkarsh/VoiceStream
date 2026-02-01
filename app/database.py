@@ -6,7 +6,7 @@ from app.config import settings
 # Create async engine
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=True,  # Set to True for SQL query logging during development
+    echo=False,  # Set to True for SQL query logging during development
     pool_size=5,
     max_overflow=10,
     pool_pre_ping=True,  # Verify connections before using
