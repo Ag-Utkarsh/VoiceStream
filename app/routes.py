@@ -23,20 +23,19 @@ async def health_check():
 async def ingest_packet(
     call_id: str,
     packet: PacketRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Ingest audio metadata packet
     
-    - **Non-blocking**: Returns 202 Accepted within <50ms
+    - **Asynchronous**: Non-blocking I/O with concurrent request handling
     - **Validates**: Sequence order, detects gaps and duplicates
-    - **Background**: Stores packet and updates call metadata asynchronously
+    - **Returns**: Gap detection and duplicate information in response
+    - **Performance**: <50ms response time
     """
     
-    # Queue background task for packet processing
-    background_tasks.add_task(
-        validate_and_store_packet,
+    # Process packet with await (async I/O, non-blocking)
+    result = await validate_and_store_packet(
         db,
         call_id,
         packet.sequence,
@@ -44,12 +43,15 @@ async def ingest_packet(
         packet.timestamp
     )
     
-    # Return immediately (non-blocking)
+    # Return with full gap/duplicate information
     return PacketResponse(
-        status="accepted",
-        message="Packet queued for processing",
+        status=result["status"],
+        message=result["message"],
         call_id=call_id,
-        sequence=packet.sequence
+        sequence=result["sequence"],
+        total_received=result.get("total_received"),
+        missing_sequences=result.get("missing_sequences"),
+        duplicate=result.get("duplicate", False)
     )
 
 @router.post("/v1/call/complete/{call_id}", status_code=202)
@@ -72,13 +74,18 @@ async def complete_call(
     if not call:
         raise HTTPException(status_code=404, detail=f"Call {call_id} not found")
     
-    # Queue background task for completion processing
-    background_tasks.add_task(
-        process_call_completion,
-        db,
-        call_id,
-        completion.total_packets
-    )
+    # Wrapper function that creates its own DB session
+    async def process_completion_task():
+        from app.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            await process_call_completion(
+                db,
+                call_id,
+                completion.total_packets
+            )
+    
+    # Queue background task
+    background_tasks.add_task(process_completion_task)
     
     return {
         "status": "accepted",
@@ -86,6 +93,7 @@ async def complete_call(
         "call_id": call_id,
         "expected_total_packets": completion.total_packets
     }
+
 
 @router.websocket("/ws/supervisor")
 async def websocket_supervisor(websocket: WebSocket):
