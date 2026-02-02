@@ -3,6 +3,7 @@
 A real-time microservice for ingesting streaming audio metadata from a PBX system, orchestrating AI processing for transcription and sentiment analysis, and providing real-time visibility to supervisors via WebSocket.
 
 For more task details, checkout [task.txt](task.txt).
+For more project details, checkout [DOCUMENTATION.md](DOCUMENTATION.md).
 
 ---
 
