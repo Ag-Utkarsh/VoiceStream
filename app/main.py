@@ -21,8 +21,24 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting VoiceStream PBX Microservice...")
     async with engine.begin() as conn:
+        # Check if tables exist
+        def check_tables_exist(connection):
+            from sqlalchemy import inspect
+            inspector = inspect(connection)
+            existing_tables = inspector.get_table_names()
+            expected_tables = {'calls', 'packets'}
+            return expected_tables.issubset(set(existing_tables))
+        
+        tables_existed = await conn.run_sync(check_tables_exist)
+        
+        # Create tables (only creates if they don't exist)
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables created successfully")
+        
+        if tables_existed:
+            logger.info("✓ Using existing database tables (calls, packets)")
+        else:
+            logger.info("✓ Database tables created successfully (calls, packets)")
+    
     
     yield
     

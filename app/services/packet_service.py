@@ -33,6 +33,27 @@ async def validate_and_store_packet(
         db.add(call)
         await db.flush()
     
+    # Check if call is already completed (no longer accepting packets)
+    if call.expected_next_sequence is None:
+        logger.warning(f"Call {call_id}: Packet {sequence} rejected - call already completed")
+        
+        await manager.broadcast({
+            "event": "packet_rejected",
+            "call_id": call_id,
+            "sequence": sequence,
+            "reason": "Call already completed",
+            "state": call.state
+        })
+        
+        return {
+            "status": "rejected",
+            "message": "Call already completed, no longer accepting packets",
+            "duplicate": False,
+            "sequence": sequence,
+            "total_received": call.total_packets_received,
+            "missing_sequences": call.missing_sequences
+        }
+    
     # Check if this is a duplicate
     is_duplicate = False
     if sequence < call.expected_next_sequence:
@@ -41,11 +62,22 @@ async def validate_and_store_packet(
             # Not in missing list = duplicate
             is_duplicate = True
             logger.warning(f"Call {call_id}: Duplicate packet {sequence}")
+            
+            await manager.broadcast({
+                "event": "packet_duplicate",
+                "call_id": call_id,
+                "sequence": sequence,
+                "total_received": call.total_packets_received,
+                "missing_sequences": call.missing_sequences
+            })
+            
             return {
                 "status": "duplicate",
                 "message": "Packet already received",
                 "duplicate": True,
-                "sequence": sequence
+                "sequence": sequence,
+                "total_received": call.total_packets_received,
+                "missing_sequences": call.missing_sequences
             }
     
     # Try to store packet
@@ -62,11 +94,24 @@ async def validate_and_store_packet(
         # Database caught duplicate via UNIQUE constraint
         await db.rollback()
         logger.warning(f"Call {call_id}: Duplicate packet {sequence} (caught by DB)")
+        
+        await db.refresh(call)
+        
+        await manager.broadcast({
+            "event": "packet_duplicate",
+            "call_id": call_id,
+            "sequence": sequence,
+            "total_received": call.total_packets_received,
+            "missing_sequences": call.missing_sequences
+        })
+        
         return {
             "status": "duplicate",
             "message": "Packet already received",
             "duplicate": True,
-            "sequence": sequence
+            "sequence": sequence,
+            "total_received": call.total_packets_received,
+            "missing_sequences": call.missing_sequences
         }
     
     # Update call metadata
@@ -126,6 +171,7 @@ async def process_call_completion(
     # Store expected total packets
     call = await get_call(db, call_id)
     call.expected_total_packets = total_packets
+    call.expected_next_sequence = None  # No longer expecting packets
     await db.commit()
     
     # Grace period for late packets

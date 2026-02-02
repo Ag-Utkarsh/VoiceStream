@@ -54,3 +54,7 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+high_level_design.md
+assessment_understanding.md
+edge_cases_assessment.md

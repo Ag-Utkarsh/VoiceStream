@@ -10,7 +10,7 @@ class Call(Base):
     state = Column(String, nullable=False, default="IN_PROGRESS")
     total_packets_received = Column(Integer, default=0)
     expected_total_packets = Column(Integer, nullable=True)
-    expected_next_sequence = Column(Integer, default=0)
+    expected_next_sequence = Column(Integer, default=0, nullable=True)
     missing_sequences = Column(ARRAY(Integer), default=[])
     transcription = Column(Text, nullable=True)
     sentiment = Column(String, nullable=True)
